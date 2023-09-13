@@ -128,6 +128,7 @@ def _perl_binary_implementation(ctx):
             "{interpreter}": interpreter.short_path,
             "{main}": main.short_path,
             "{workspace_name}": ctx.label.workspace_name or ctx.workspace_name,
+            "{shebang}": toolchain.binary_wrapper_shebang,
         },
         is_executable = True,
     )

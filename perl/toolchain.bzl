@@ -12,6 +12,7 @@ PerlRuntimeInfo = provider(
         "runtime": "A list of labels which points to runtime libraries",
         "xs_headers": "The c library support code for xs modules",
         "xsubpp": "A label which points to the xsubpp command",
+        "binary_wrapper_shebang": "Shebang to use for the wrapper script emitted for `perl_binary` targets",
     },
 )
 
@@ -53,6 +54,7 @@ def _perl_toolchain_impl(ctx):
                 xs_headers = xs_headers,
                 runtime = ctx.files.runtime,
                 perlopt = ctx.attr.perlopt,
+                binary_wrapper_shebang = ctx.attr.binary_wrapper_shebang,
             ),
             make_variables = platform_common.TemplateVariableInfo({
                 "PERL": interpreter_cmd_path,
@@ -70,6 +72,12 @@ perl_toolchain = rule(
             mandatory = True,
             allow_files = True,
             cfg = "target",
+        ),
+        "binary_wrapper_shebang": attr.string(
+            # See: https://bazel.build/reference/be/python#py_runtime.stub_shebang
+            #
+            # For rules_perl this is for the binary wrapper script.
+            default = "#!/usr/bin/env bash",
         ),
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },
