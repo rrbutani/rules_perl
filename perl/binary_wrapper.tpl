@@ -1,4 +1,4 @@
-#!/bin/sh
+{shebang}
 
 if [ -n "${RUNFILES_DIR+x}" ]; then
   PATH_PREFIX=$RUNFILES_DIR/{workspace_name}/
