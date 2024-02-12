@@ -7,9 +7,9 @@ generated in perl_download in repo.bzl.
 PerlRuntimeInfo = provider(
     doc = "Information about a Perl interpreter, related commands and libraries",
     fields = {
-        "interpreter": "A label which points to the Perl interpreter",
+        "interpreter": "A label which points to the Perl interpreter", # TODO: should we be inspecting this label for runfile deps too? or just looking at runtime?
         "perlopt": "A list of strings which should be passed to the interpreter",
-        "runtime": "A list of labels which points to runtime libraries",
+        "runtime": "A depset of files representing the runtime libraries",
         "xs_headers": "The c library support code for xs modules",
         "xsubpp": "A label which points to the xsubpp command",
         "binary_wrapper_shebang": "Shebang to use for the wrapper script emitted for `perl_binary` targets",
@@ -52,7 +52,13 @@ def _perl_toolchain_impl(ctx):
                 interpreter = interpreter_cmd,
                 xsubpp = xsubpp_cmd,
                 xs_headers = xs_headers,
-                runtime = ctx.files.runtime,
+                runtime = depset(
+                    direct = ctx.files.runtime,
+                    transitive = [
+                        d[DefaultInfo].default_runfiles.files
+                        for d in ctx.attr.runtime
+                    ],
+                ),
                 perlopt = ctx.attr.perlopt,
                 binary_wrapper_shebang = ctx.attr.binary_wrapper_shebang,
             ),

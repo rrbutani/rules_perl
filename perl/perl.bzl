@@ -71,7 +71,7 @@ def _transitive_srcs(deps):
         ],
     )
 
-def transitive_deps(ctx, extra_files = [], extra_deps = []):
+def transitive_deps(ctx, extra_files = [], extra_deps = [], extra_depsets = []):
     """Calculates transitive sets of args.
 
     Calculates the transitive sets for perl sources, data runfiles,
@@ -84,11 +84,12 @@ def transitive_deps(ctx, extra_files = [], extra_deps = []):
         ctx: a ctx object for a perl_library or a perl_binary rule.
         extra_files: a list of File objects to be added to the default_files
         extra_deps: a list of Target objects.
+        extra_depsets: a list of depsets of File objects.
     """
     deps = _transitive_srcs(ctx.attr.deps + extra_deps)
     files = ctx.runfiles(
         files = extra_files + ctx.files.srcs + ctx.files.data,
-        transitive_files = depset(transitive = deps.files),
+        transitive_files = depset(transitive = deps.files + extra_depsets),
         collect_default = True,
     )
     return struct(
@@ -114,7 +115,7 @@ def _perl_binary_implementation(ctx):
     toolchain = ctx.toolchains["@rules_perl//:toolchain_type"].perl_runtime
     interpreter = toolchain.interpreter
 
-    transitive_sources = transitive_deps(ctx, extra_files = toolchain.runtime + [ctx.outputs.executable])
+    transitive_sources = transitive_deps(ctx, extra_files = [ctx.outputs.executable], extra_depsets = [toolchain.runtime])
 
     main = ctx.file.main
     if main == None:
@@ -222,7 +223,7 @@ def _perl_xs_implementation(ctx):
     toolchain = ctx.toolchains["@rules_perl//:toolchain_type"].perl_runtime
     xsubpp = toolchain.xsubpp
 
-    toolchain_files = depset(toolchain.runtime)
+    toolchain_files = toolchain.runtime
 
     gen = []
     cc_infos = []
