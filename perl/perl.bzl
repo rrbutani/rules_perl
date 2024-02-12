@@ -23,6 +23,7 @@ PerlLibrary = provider(
     doc = "A provider containing components of a `perl_library`",
     fields = [
         "transitive_perl_sources",
+        "transitive_env_vars",
     ],
 )
 
@@ -99,6 +100,31 @@ def transitive_deps(ctx, extra_files = [], extra_deps = []):
         files = files,
     )
 
+def transitive_env_vars(ctx):
+    # TODO: apply make vars substitution to the values!
+    new_vars = ctx.attr.env
+    for name in new_vars.keys():
+        if not _is_identifier(name):
+            fail("%s is not a valid environment variable name." % str(name))
+
+    # Would be nice to propagate as a depset but... can't do collision detection
+    # eagerly then.
+    #
+    # TODO: probably just accept this and use the depset...
+    other_vars = [
+        source[PerlLibrary].transitive_env_vars
+        for source in ctx.attr.srcs + ctx.attr.data + ctx.attr.deps
+        if PerlLibrary in source
+    ]
+    vars = {}
+    for var_dict in other_vars + [new_vars]:
+        for k, v in var_dict.items():
+            if k in vars and vars[k] != v:
+                print("warning: overriding conflicting value for env var {}: prev = {}, new = {}".format(k, vars[k], v))
+            vars[k] = v
+
+    return vars
+
 def _perl_library_implementation(ctx):
     transitive_sources = transitive_deps(ctx)
     return [
@@ -107,6 +133,7 @@ def _perl_library_implementation(ctx):
         ),
         PerlLibrary(
             transitive_perl_sources = transitive_sources.srcs,
+            transitive_env_vars = transitive_env_vars(ctx),
         ),
     ]
 
@@ -139,7 +166,8 @@ def _perl_binary_implementation(ctx):
 
 def _env_vars(ctx):
     environment = ""
-    for name, value in ctx.attr.env.items():
+    vars = transitive_env_vars(ctx)
+    for name, value in vars.items():
         if not _is_identifier(name):
             fail("%s is not a valid environment variable name." % str(name))
         environment += ("{key}='{value}' ").format(
@@ -272,6 +300,7 @@ perl_library = rule(
         "data": _perl_data_attr,
         "deps": _perl_deps_attr,
         "srcs": _perl_srcs_attr,
+        "env": _perl_env_attr,
     },
     implementation = _perl_library_implementation,
     toolchains = ["@rules_perl//:toolchain_type"],
