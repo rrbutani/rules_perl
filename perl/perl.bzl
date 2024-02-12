@@ -23,6 +23,7 @@ PerlLibraryInfo = provider(
     fields = [
         "transitive_perl_sources",
         "transitive_env_vars",
+        "transitive_include_paths", # depset of runfiles-tree main-repo-dir relative include paths. i.e. like `short_path`s
     ],
 )
 
@@ -54,6 +55,23 @@ _perl_main_attr = attr.label(
 )
 
 _perl_env_attr = attr.string_dict()
+
+_perl_package_relative_includes_attr = attr.string_list(doc = (
+    "include paths relative to the package this target is defined in\n\n" +
+    "includes that do not cover any of the files in `srcs` produce errors\n" +
+    "includes that escape the current repository or include the whole " +
+    "repository produce an error"
+))
+
+_perl_add_include_for_repo_root = attr.bool(
+    default = True,
+    doc = (
+        "adds a `-I<runfiles dir>/<defining repo's name>` include to " +
+        "dependent `perl_binary`s, allowing you to `use` files from " +
+        "`perl_library`s in this target's repo without needing to alter the " +
+        "lib path"
+    ),
+)
 
 def _get_main_from_sources(ctx):
     sources = ctx.files.srcs
@@ -128,6 +146,77 @@ def transitive_env_vars(ctx):
 
     return vars
 
+# The returned include paths are relative to the main-repo's dir under the
+# runfiles tree for this target (just like `file.short_path`).
+#
+# See: https://bazel.build/extending/rules#runfiles_location
+def _resolve_direct_includes(ctx):
+    package_path = ctx.label.package
+    target_repo = ctx.label.workspace_name
+
+    include_paths = []
+    for package_rel_inc in ctx.attr.package_relative_includes:
+        repo_relative_inc = paths.normalize(paths.join(package_path, package_rel_inc))
+        if paths.is_absolute(repo_relative_inc):
+            fail("package relative includes must be relative, not absolute:", package_rel_inc)
+        if repo_relative_inc == ".":
+            fail("package relative includes cannot select the whole repository:", package_rel_inc)
+        if repo_relative_inc == ".." or repo_relative_inc.startswith("../"):
+            fail("package relative includes cannot escape the current repository:", package_rel_inc)
+
+        covered = False
+        for f in ctx.files.srcs:
+            # don't consider files not in the target's repository:
+            if f.owner.workspace_name != target_repo: continue
+
+            # if this target isn't in the main repo, the short path will start
+            # with `../<repo name>/`: remove this to get the repo-relative path:
+            path_to_repo_dir = ""
+            repo_relative_path = f.short_path
+            if target_repo != "":
+                path_to_repo_dir = "../" + target_repo + "/"
+                if not repo_relative_path.startswith(path_to_repo_dir): fail("unreachable")
+                repo_relative_path = repo_relative_path.removeprefix(path_to_repo_dir)
+
+            # check if this file is beneath the include:
+            if repo_relative_path.startswith(repo_relative_inc):
+                include_paths.append(
+                    paths.normalize(paths.join(path_to_repo_dir, repo_relative_inc))
+                )
+
+                covered = True
+                break
+
+        if not covered:
+            fail("no files are covered by the package relative include:",
+                package_rel_inc,
+                "\nnormalized to repo:", repo_relative_inc,
+                "got files:\n  -", "\n  - ".join([ str(f) for f in ctx.files.srcs])
+            )
+
+
+    if ctx.attr.add_include_for_repo_root:
+        # If this target is in the main repo (i.e. `ctx.label.repo_name` is
+        # empty), pwd (i.e. the runfiles tree's main-repo dir) is our include
+        # path for the repo. Otherwise, it's: up a dir + the repo name.
+        if not target_repo:
+            inc = "./"
+        else:
+            inc = "../" + target_repo + "/"
+
+        include_paths.append(inc)
+
+    return include_paths
+
+def transitive_includes(ctx):
+    return depset(
+        direct = _resolve_direct_includes(ctx),
+        transitive = [
+            d[PerlLibraryInfo].transitive_include_paths
+            for d in ctx.attr.deps if PerlLibraryInfo in d
+        ],
+    )
+
 def _perl_library_implementation(ctx, include_default_info = True):
     transitive_sources = transitive_deps(ctx)
     return ([] if not include_default_info else [
@@ -138,6 +227,7 @@ def _perl_library_implementation(ctx, include_default_info = True):
         PerlLibraryInfo(
             transitive_perl_sources = transitive_sources.srcs,
             transitive_env_vars = transitive_env_vars(ctx),
+            transitive_include_paths = transitive_includes(ctx)
         ),
     ]
 
@@ -146,6 +236,8 @@ def _perl_binary_implementation(ctx):
     interpreter = toolchain.interpreter
 
     transitive_sources = transitive_deps(ctx, extra_files = [ctx.outputs.executable], extra_depsets = [toolchain.runtime])
+
+    include_paths = transitive_includes(ctx).to_list()
 
     main = ctx.file.main
     if main == None:
@@ -158,8 +250,28 @@ def _perl_binary_implementation(ctx):
             "{env_vars}": _env_vars(ctx),
             "{interpreter}": interpreter.short_path,
             "{main}": main.short_path,
-            "{workspace_name}": ctx.label.workspace_name or ctx.workspace_name,
+
+            # TODO: should we be hardcoding `_main` here for the workspace name?
+            #
+            # My understanding is that `.short_path` will return paths starting
+            # with `../<repo>` for any file that's not in the main repo (not for
+            # files not in the defining target's repo; i.e. for a target in an
+            # external repo with a file in that same repo, `.short_path` will
+            # return `../repo/<path>`, not `<path>`).
+            #
+            # In other words, I think this may break main-repo paths for targets
+            # that are not in the main-repo...
+            #
+            # See: https://bazel.build/extending/rules#runfiles_location
+            # "{workspace_name}": ctx.label.workspace_name or ctx.workspace_name,
+            "{main_workspace_name}": ctx.workspace_name,
             "{shebang}": toolchain.binary_wrapper_shebang,
+
+            "{includes}": "\n  ".join([
+                # TODO: verify escape
+                """"-I${{PATH_PREFIX}}"'{inc}'""".format(inc = i.replace("'", "\\'"))
+                for i in include_paths
+            ])
         },
         is_executable = True,
     )
@@ -308,6 +420,8 @@ perl_library = rule(
         "deps": _perl_deps_attr,
         "srcs": _perl_srcs_attr,
         "env": _perl_env_attr,
+        "package_relative_includes": _perl_package_relative_includes_attr,
+        "add_include_for_repo_root": _perl_add_include_for_repo_root,
     },
     implementation = _perl_library_implementation,
     toolchains = ["@rules_perl//:toolchain_type"],
@@ -321,6 +435,8 @@ perl_binary = rule(
         "env": _perl_env_attr,
         "main": _perl_main_attr,
         "srcs": _perl_srcs_attr,
+        "package_relative_includes": _perl_package_relative_includes_attr,
+        "add_include_for_repo_root": _perl_add_include_for_repo_root,
         "_wrapper_template": attr.label(
             allow_single_file = True,
             default = "binary_wrapper.tpl",
@@ -339,6 +455,8 @@ perl_test = rule(
         "env": _perl_env_attr,
         "main": _perl_main_attr,
         "srcs": _perl_srcs_attr,
+        "package_relative_includes": _perl_package_relative_includes_attr,
+        "add_include_for_repo_root": _perl_add_include_for_repo_root,
         "_wrapper_template": attr.label(
             allow_single_file = True,
             default = "binary_wrapper.tpl",
