@@ -128,12 +128,13 @@ def transitive_env_vars(ctx):
 
     return vars
 
-def _perl_library_implementation(ctx):
+def _perl_library_implementation(ctx, include_default_info = True):
     transitive_sources = transitive_deps(ctx)
-    return [
+    return ([] if not include_default_info else [
         DefaultInfo(
             runfiles = transitive_sources.files,
         ),
+    ]) + [
         PerlLibraryInfo(
             transitive_perl_sources = transitive_sources.srcs,
             transitive_env_vars = transitive_env_vars(ctx),
@@ -163,10 +164,12 @@ def _perl_binary_implementation(ctx):
         is_executable = True,
     )
 
-    return DefaultInfo(
-        executable = ctx.outputs.executable,
-        runfiles = transitive_sources.files,
-    )
+    return [
+        DefaultInfo(
+            executable = ctx.outputs.executable,
+            runfiles = transitive_sources.files,
+        ),
+    ] + _perl_library_implementation(ctx, include_default_info = False)
 
 def _env_vars(ctx):
     environment = ""
@@ -326,6 +329,7 @@ perl_binary = rule(
     executable = True,
     implementation = _perl_binary_implementation,
     toolchains = ["@rules_perl//:toolchain_type"],
+    provides = [PerlLibraryInfo],
 )
 
 perl_test = rule(
