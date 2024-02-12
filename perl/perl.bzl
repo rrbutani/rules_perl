@@ -18,14 +18,16 @@ load("@bazel_skylib//lib:new_sets.bzl", "sets")
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain")
 
-# buildifier: disable=name-conventions
-PerlLibrary = provider(
+PerlLibraryInfo = provider(
     doc = "A provider containing components of a `perl_library`",
     fields = [
         "transitive_perl_sources",
         "transitive_env_vars",
     ],
 )
+
+# buildifier: disable=name-conventions
+PerlLibrary = PerlLibraryInfo # to maintain backwards compatibility
 
 PERL_XS_COPTS = [
     "-fwrapv",
@@ -40,7 +42,7 @@ _perl_srcs_attr = attr.label_list(allow_files = _perl_file_types)
 
 _perl_deps_attr = attr.label_list(
     allow_files = False,
-    providers = [PerlLibrary],
+    providers = [PerlLibraryInfo],
 )
 
 _perl_data_attr = attr.label_list(
@@ -62,9 +64,9 @@ def _get_main_from_sources(ctx):
 def _transitive_srcs(deps):
     return struct(
         srcs = [
-            d[PerlLibrary].transitive_perl_sources
+            d[PerlLibraryInfo].transitive_perl_sources
             for d in deps
-            if PerlLibrary in d
+            if PerlLibraryInfo in d
         ],
         files = [
             d[DefaultInfo].default_runfiles.files
@@ -113,9 +115,9 @@ def transitive_env_vars(ctx):
     #
     # TODO: probably just accept this and use the depset...
     other_vars = [
-        source[PerlLibrary].transitive_env_vars
+        source[PerlLibraryInfo].transitive_env_vars
         for source in ctx.attr.srcs + ctx.attr.data + ctx.attr.deps
-        if PerlLibrary in source
+        if PerlLibraryInfo in source
     ]
     vars = {}
     for var_dict in other_vars + [new_vars]:
@@ -132,7 +134,7 @@ def _perl_library_implementation(ctx):
         DefaultInfo(
             runfiles = transitive_sources.files,
         ),
-        PerlLibrary(
+        PerlLibraryInfo(
             transitive_perl_sources = transitive_sources.srcs,
             transitive_env_vars = transitive_env_vars(ctx),
         ),
@@ -306,6 +308,7 @@ perl_library = rule(
     },
     implementation = _perl_library_implementation,
     toolchains = ["@rules_perl//:toolchain_type"],
+    provides = [PerlLibraryInfo],
 )
 
 perl_binary = rule(
